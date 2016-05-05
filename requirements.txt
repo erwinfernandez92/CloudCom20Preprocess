@@ -1,0 +1,9 @@
+CouchDB==1.0.1
+nltk==3.2.1
+oauthlib==1.0.3
+requests==2.9.1
+requests-oauthlib==0.6.1
+Shapely==1.5.15
+six==1.10.0
+tweepy==3.5.0
+virtualenv==15.0.1
