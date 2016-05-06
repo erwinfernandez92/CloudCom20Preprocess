@@ -5,25 +5,21 @@ from shapely.geometry.geo import shape
 import nltk
 import csv
 import pickle
+import time
 
+############################### CONSTANTS #####################################
 dbhost = 'http://127.0.0.1:5984'
 dbname_tweet = 'raw_tweets'
 dbname_relation = 'tweets_polygons_relational'
-couch = Server(dbhost)
-dbtweet = couch[dbname_tweet]
+geojsonfile = 'geojsonfile_mapshaper_simplified.json'
+
+WAIT_TIME = 3600    # in seconds
 
 tweets =[]
 NEG = "1"
 POS = "2"
 OT = "4"
 rating =[NEG,POS,OT]
-
-try:
-    dbrelation = couch.create(dbname_relation)
-except Exception as e:
-    print('Error creating database (probably because it already exists)')
-    print(str(e))
-    dbrelation = couch[dbname_relation]
 
 ###############################################################################
 
@@ -57,6 +53,7 @@ def sentimentDecider(tweet):
 # This section is preparing classifier for determining the tweet's sentiment
 # Reading the training set for sentiment analysis that has been obtained from
 # internet.
+
 with open ("trainSet.tsv") as tsvfile:
     tsvreader = csv.reader(tsvfile, delimiter="\t")
     for line in tsvreader:
@@ -98,7 +95,7 @@ f.close()
 
 ###############################################################################
 
-# this function takes a polygon json file and returns a dictionary with
+# This function takes a polygon json file and returns a dictionary with
 # a key of the polygon ID and a value of the polygon shape
 def storePolygons(jsonfile):
     with open(jsonfile) as data_file:
@@ -112,8 +109,8 @@ def storePolygons(jsonfile):
             list_of_polygons[polygon_id] = shape(feature['geometry'])
     return list_of_polygons
 
-# this fucntion takes a raw tweet database and use a map reduce function to
-# filter the tweet with no geo value
+# This fucntion takes a raw tweet database and use a map reduce function to
+# filter out the tweet with no geo value and also returns the number of tweets
 def tweetReduce(dbtweet):
     mapFunc = '''function(doc) {
         if(doc.coordinates && !doc.preprocessed) {
@@ -122,8 +119,10 @@ def tweetReduce(dbtweet):
         }'''
     view = design.ViewDefinition('tweets', 'reduced', mapFunc)
     view.sync(dbtweet)
+    viewResults = dbtweet.view('tweets/reduced')
+    return len(viewResults)
 
-# this function preprocesses the tweets to get the location of the tweets
+# This function preprocesses the tweets to get the location of the tweets
 # identified by the polygon and the sentiment of the tweets, and then stores
 # them in a database
 def preprocess(dbtweet, list_of_polygons, dbrelation):
@@ -143,6 +142,7 @@ def preprocess(dbtweet, list_of_polygons, dbrelation):
                 sentiment = sentimentDecider(tweet['text'])
                 print("Tweet:", tweet['text'])
                 print("Sentiment:",sentiment)
+                print()
                 doc = {"tweet_id" : tweet_id, "polygon_id" : polygon_id,
                     "sentiment" : sentiment}
                 dbrelation.save(doc)
@@ -153,7 +153,33 @@ def preprocess(dbtweet, list_of_polygons, dbrelation):
         tweet['preprocessed'] = True
         dbtweet[tweet_id] = tweet
 
-jsonfile = 'geojsonfile_mapshaper_simplified.json'
-list_of_polygons = storePolygons(jsonfile)
-tweetReduce(dbtweet)
-preprocess(dbtweet, list_of_polygons, dbrelation)
+list_of_polygons = storePolygons(geojsonfile)
+
+# This process handles when the connection to the couchdb returns errors,
+# such as the couchdb is down.
+# This will also let the process run forever and only exit when it is
+# terminated by the user, i.e. it will regularly check the tweets database
+# every specified time, e.g. every 1 hour, and preprocess the them
+try:
+    couch = Server(dbhost)
+    dbtweet = couch[dbname_tweet]
+    try:
+        dbrelation = couch.create(dbname_relation)
+    except Exception as e:
+        print(str(e))
+        dbrelation = couch[dbname_relation]
+    while True:
+        try:
+            num_of_tweets = tweetReduce(dbtweet)
+            if(num_of_tweets > 0):
+                print('Preprocessing tweets...')
+                preprocess(dbtweet, list_of_polygons, dbrelation)
+                print('Finished preprocessing.')
+            else:
+                print('No tweets to be preprocessed.')
+            time.sleep(WAIT_TIME)
+        except Exception as e:
+            print(str(e))
+            time.sleep(WAIT_TIME)
+except Exception as e:
+    print(str(e))
