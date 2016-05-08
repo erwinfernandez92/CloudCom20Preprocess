@@ -122,6 +122,30 @@ def tweetReduce(dbtweet):
     viewResults = dbtweet.view('tweets/reduced')
     return len(viewResults)
 
+# This function takes the reduced tweet database and creates a view
+# for the web app to see the sentiments aggregated by area code
+def areaSentiment(dbpolygon):
+    mapFunc = '''function(doc) {
+      emit(doc.polygon_id, doc.sentiment);
+    }'''
+    reduceFunc = '''function (key, values, rereduce) {
+      var sentimentTypes = {positive: 0, negative: 0, neutral: 0};
+      if (rereduce) {
+        values.forEach(function(reduceVal) {
+          Object.keys(reduceVal).forEach(function(key,index) {
+            sentimentTypes[key] += reduceVal[key];
+          });
+        });
+      } else {
+        values.forEach(function(sentiment) {
+          sentimentTypes[sentiment]++;
+        });
+      }
+      return sentimentTypes;
+    }'''
+    view = design.ViewDefinition('stats', 'count_polygons', mapFunc, reduceFunc)
+    view.sync(dbpolygon)
+
 # This function preprocesses the tweets to get the location of the tweets
 # identified by the polygon and the sentiment of the tweets, and then stores
 # them in a database
@@ -165,6 +189,7 @@ try:
     dbtweet = couch[dbname_tweet]
     try:
         dbrelation = couch.create(dbname_relation)
+        areaSentiment(dbrelation)
     except Exception as e:
         print(str(e))
         dbrelation = couch[dbname_relation]
